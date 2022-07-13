@@ -1,0 +1,102 @@
+#!/usr/bin/env sh
+
+check_cmd() {
+  which session-manager-plugin 1>/dev/null 2>&1
+  if [ $? -ne 0 ]; then
+    echo "Not found Session Manager Plugin"
+    echo "Install please"
+    exit 1
+  fi
+
+  which aws 1>/dev/null 2>&1
+  if [ $? -ne 0 ]; then
+    echo "Not found aws-cli"
+    echo "Install please"
+    exit 1
+  fi
+}
+
+usage() {
+  cmd=`basename "$0"`
+  echo "Usage: ${cmd} (OPTION cluster|profile) [OPTION service|container|region] ..."
+  echo "-C, --cluster:   Part of the cluster name (REQUIRED)"
+  echo "-s, --service:   Service name (default 'app')"
+  echo "-c, --container: Container name (default 'app')"
+  echo "-p, --profile:   AWS profile name (use environment variable 'AWS_PROFILE' as the default value)"
+  echo "-r, --region:    AWS region name (default 'ap-northeast-1')"
+}
+
+check_cmd
+
+service='app'
+container='app'
+region='ap-northeast-1'
+profile=$AWS_PROFILE
+
+while [ "$#" -gt 0 ]; do
+  option=$1
+  shift
+  arg=$1
+  shift
+
+  case $option in
+    -C | --cluster)
+      cluster=$arg
+      ;;
+    -s | --service)
+      service=$arg
+      ;;
+    -c | --container)
+      container=$arg
+      ;;
+    -p | --profile)
+      profile=$arg
+      ;;
+    -r | --region)
+      region=$arg
+      ;;
+    -h | --help)
+      usage
+      exit 0
+      ;;
+    *)
+      usage
+      exit 1
+      ;;
+  esac
+done
+
+if [ -z $cluster ] || [ -z $profile ]; then
+  usage
+  exit 1
+fi
+profile_region="--profile ${profile} --region ${region}"
+
+# cluster
+cluster_arn=`aws ecs list-clusters --output text ${profile_region} | grep ${cluster} | ruby -ne 'puts $_.split[-1]'`
+if [ $? -ne 0 ]; then
+  exit 1
+fi
+
+cluster_name=`echo $cluster_arn | ruby -ne 'puts $_.split("/")[-1]'`
+if [ -z $cluster_name ]; then
+  echo "Cannot find a cluster name that containes '${cluster}' as part of it."
+  exit 1
+fi
+echo "cluster_name: $cluster_name"
+
+# task
+task=`aws ecs list-tasks --cluster ${cluster_name} --service-name ${service} --output text ${profile_region} | ruby -ne 'puts $_.split[-1]'`
+if [ $? -ne 0 ]; then
+  exit 1
+fi
+
+task_id=`echo $task | ruby -ne 'puts $_.split("/")[-1]'`
+if [ -z $task_id ]; then
+  echo "Cannot find the runnnig tasks in the service '${service}'."
+  exit 1
+fi
+echo "service: ${service}"
+echo "task_id: ${task_id}"
+
+aws ecs execute-command --cluster ${cluster_name} --task $task_id --container ${container} --interactive --command '/bin/bash' ${profile_region}
